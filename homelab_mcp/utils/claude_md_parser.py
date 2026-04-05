@@ -13,7 +13,11 @@ def extract_proxmox_nodes(claude_md: str | Path) -> list[dict]:
     Returns:
         Lista de dicts con keys: alias, host, port, token_id, endpoint_node, estado.
     """
-    if isinstance(claude_md, (str, Path)) and Path(claude_md).exists():
+    if isinstance(claude_md, Path) or (
+        isinstance(claude_md, str)
+        and '\n' not in claude_md
+        and Path(claude_md).exists()
+    ):
         content = Path(claude_md).read_text(encoding="utf-8", errors="replace")
     elif isinstance(claude_md, str):
         content = claude_md
@@ -41,7 +45,7 @@ def extract_proxmox_nodes(claude_md: str | Path) -> list[dict]:
         # Saltar nodos offline o headers
         if estado.lower() in ("offline", "estado"):
             continue
-        if not token_id or token_id == "—":
+        if not token_id or token_id == "\u2014":
             continue
 
         # Separar user y token_name del token_id (e.g. "user@pam!my-token")
