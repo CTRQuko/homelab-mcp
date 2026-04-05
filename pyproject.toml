@@ -1,0 +1,55 @@
+[project]
+name = "homelab-mcp"
+version = "1.0.0"
+description = "Colección de servidores MCP para mi homelab (Proxmox, Linux, Windows, Docker, npm, Python)."
+authors = [
+  { name = "CTRQuko" }
+]
+requires-python = ">=3.11"
+
+dependencies = [
+  "fastmcp>=0.3.0",
+  "python-dotenv>=1.0.1",
+  "proxmoxer>=2.0.0",
+  "docker>=7.0.0",
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0",
+  "pytest-mock>=3.12",
+  "pytest-cov>=4.0",
+]
+dev = [
+  "ruff>=0.4",
+  "black>=24.0",
+  "mypy>=1.0",
+]
+
+[project.scripts]
+homelab-proxmox-mcp = "homelab_mcp.proxmox_mcp.server:main"
+homelab-linux-mcp   = "homelab_mcp.linux_mcp.server:main"
+homelab-windows-mcp = "homelab_mcp.windows_mcp.server:main"
+homelab-docker-mcp  = "homelab_mcp.docker_mcp.server:main"
+homelab-npm-mcp     = "homelab_mcp.npm_mcp.server:main"
+homelab-python-mcp  = "homelab_mcp.python_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --strict-markers --strict-config"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
