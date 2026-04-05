@@ -1,0 +1,16 @@
+# Forzar LF en scripts shell — evita CRLF en Windows
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf
+*.env text eol=lf
+*.example text eol=lf
+
+# Binarios — sin conversión
+*.png binary
+*.jpg binary
+*.gif binary
