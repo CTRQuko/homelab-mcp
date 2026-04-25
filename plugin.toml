@@ -1,27 +1,19 @@
-# Fase 7d cutover manifest — unified "homelab" plugin.
+# Mimir plugin manifest for CTRQuko/homelab-mcp.
 #
-# Drop this file in C:/homelab/mcp-servers/homelab-mcp/plugin.toml
-# instead of (or alongside) the four separate proxmox/linux/windows/
-# docker manifests.
+# This repo ships four sub-MCPs behind a single uv project:
+#   homelab-proxmox-mcp / homelab-linux-mcp /
+#   homelab-windows-mcp / homelab-docker-mcp
 #
-# Rationale: the upstream repo CTRQuko/homelab-mcp ships four sub-MCPs
-# behind a single uv project (homelab-{proxmox,linux,windows,docker}-mcp).
-# Mounting them as one plugin ("homelab") keeps the upstream layout
-# untouched while still exposing every tool to the client. The
-# alternative — four separate plugin.toml files in the same repo —
-# would require extending Mimir's loader to read multiple manifests
-# from the same directory, which adds complexity for marginal benefit.
+# The MVP manifest mounts only the proxmox sub-MCP, which is the most
+# used in the author's deployment and the only one that hits external
+# infrastructure via API. Linux / Windows / Docker still work standalone
+# (`uv run homelab-{linux,windows,docker}-mcp`); a multi-manifest fan-out
+# is on the TODO list when Mimir's loader supports >1 plugin.toml per
+# repo (issue tracked as Fase 7d follow-up).
 #
-# This plugin assumes the homelab-mcp repo provides an internal
-# launcher that mounts the four sub-MCPs and re-exposes them. The
-# operator can either:
-#
-# - Add a thin top-level entry point to homelab-mcp that does the
-#   internal mounting (recommended), and reference it as the runtime
-#   command below; or
-# - Replace the [runtime] block with command = "uv" + args = ["run",
-#   "homelab-proxmox-mcp"] to mount only one sub-MCP per plugin
-#   directory, treating each as a standalone homelab-* plugin.
+# To switch which sub-MCP this plugin runs, edit `[runtime].args` —
+# every value of homelab-{proxmox,linux,windows,docker}-mcp is a valid
+# entry point.
 
 [plugin]
 name = "homelab"
@@ -29,29 +21,29 @@ version = "1.0.0"
 enabled = true
 
 [runtime]
-# Adjust to whichever entry point homelab-mcp exposes for the unified
-# launcher. If no such launcher exists yet, the operator needs to add
-# one before this manifest works — see the README in
-# docs/operator-notes/cutover/.
 command = "uv"
-args = ["run", "homelab-mcp"]
+args = ["run", "homelab-proxmox-mcp"]
+# cwd defaults to the plugin directory (= this repo), so `uv run`
+# resolves the right pyproject and venv automatically.
 
 [security]
-credential_refs = ["PROXMOX_*", "DOCKER_HOST"]
+credential_refs = ["PROXMOX_*"]
 
 [[requires.hosts]]
 type = "proxmox"
 min = 1
 prompt = """
 At least one Proxmox node with an API token (VM.Audit + VM.PowerMgmt)
-is needed for the proxmox sub-MCP to be useful. Linux/Windows/Docker
-sub-MCPs work without explicit hosts but benefit from declared targets.
+is required. The proxmox sub-MCP reads PROXMOX_<NODE>_HOST,
+PROXMOX_<NODE>_USER and PROXMOX_<NODE>_TOKEN from the env Mimir
+injects.
 """
 
 [[requires.credentials]]
 pattern = "PROXMOX_*"
 prompt = """
-Proxmox credentials (PROXMOX_<NODE>_HOST / _USER / _TOKEN) are read
-from the vault by the proxmox sub-MCP. The Linux/Windows/Docker
-sub-MCPs use the local SSH config and do not require additional refs.
+Provide one set per node. Example:
+  PROXMOX_PVE1_HOST=192.0.2.10:8006
+  PROXMOX_PVE1_USER=claude@pam
+  PROXMOX_PVE1_TOKEN=<token-id>=<secret>
 """
