@@ -533,6 +533,140 @@ def list_acls(node: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tools de seguridad / postura de hosts (read-only, vía API Proxmox)
+# ---------------------------------------------------------------------------
+
+# Usuarios con sudo NOPASSWD por defecto en imágenes cloud / templates Debian
+# y similares. claude_key NUNCA debe tener acceso a estos users — privilege
+# escalation por reuso de key.
+_PRIVILEGED_DEFAULT_USERS = {
+    "root", "debian", "ubuntu", "admin", "centos", "fedora", "alpine",
+    "core", "ec2-user", "azureuser", "ansible",
+}
+
+
+@mcp.tool()
+def check_vm_security(node: str, vmid: int) -> dict:
+    """Audita la postura de seguridad de una VM (vía qm config + cloud-init).
+
+    Detecta los riesgos típicos de VMs creadas con cloud-init:
+    - Usuario default (debian, ubuntu, core, etc.) con sudo NOPASSWD por
+      defecto, accesible vía sshkey inyectada por cloud-init.
+    - claude_key inyectada en un user privilegiado (privilege escalation).
+    - Falta de bootstrap canónico (sin user `claude` whitelist + `jandro` admin).
+
+    NO ejecuta nada en la VM — solo lee la config Proxmox del host. Útil
+    como gate antes de declarar una VM lista para uso.
+
+    Args:
+        node: Alias del nodo Proxmox (pve, pve2, pve3) que aloja la VM.
+        vmid: ID numérico de la VM.
+
+    Returns:
+        Dict con secciones config (ciuser, sshkeys, ipconfig0), issues
+        (severidad + categoría + msg + fix) y overall (healthy / warnings /
+        degraded).
+    """
+    cfg = settings.proxmox.get_node(node) if node else None
+    if not cfg or not cfg.is_configured():
+        return error(f"Nodo '{node}' no configurado.")
+
+    try:
+        client = ProxmoxAPI(
+            host=cfg.host,
+            user=cfg.user,
+            token_name=cfg.token_name,
+            token_value=cfg.token_value,
+            verify_ssl=False,
+        )
+        endpoint = cfg.endpoint_node or node
+        vm_cfg = client.nodes(endpoint).qemu(vmid).config.get()
+    except Exception as e:
+        return error(
+            f"No puedo leer config de VM {vmid} en {node}",
+            str(e),
+        )
+
+    issues: list[dict] = []
+    ciuser = vm_cfg.get("ciuser", "")
+    sshkeys_raw = vm_cfg.get("sshkeys", "")
+    cipassword_set = bool(vm_cfg.get("cipassword"))
+
+    # 1. ¿ciuser es un usuario privilegiado por defecto?
+    if ciuser and ciuser in _PRIVILEGED_DEFAULT_USERS:
+        issues.append({
+            "severity": "error",
+            "category": "privileged_default_ciuser",
+            "msg": (
+                f"ciuser='{ciuser}' es un usuario con sudo NOPASSWD por defecto "
+                f"en la imagen cloud. Cualquier acceso SSH con la sshkey configurada "
+                f"se convierte en root efectivo, eludiendo el modelo de privilegio "
+                f"basado en user 'claude' con sudoers whitelist."
+            ),
+            "fix": (
+                "Bootstrap correcto post-deploy: crear usuario 'claude' (whitelist) "
+                "+ 'jandro' (admin), borrar sudo del user default o eliminar el "
+                "user default por completo. Patrón en scripts/deployment/bootstrap-pve4.sh."
+            ),
+        })
+
+    # 2. ¿sshkeys contiene la claude_key? (URL-encoded en qm config)
+    if "claude%40" in sshkeys_raw or "claude@" in sshkeys_raw:
+        if ciuser and ciuser in _PRIVILEGED_DEFAULT_USERS:
+            issues.append({
+                "severity": "error",
+                "category": "claude_key_on_privileged_user",
+                "msg": (
+                    f"sshkeys de cloud-init contiene claude_key + ciuser='{ciuser}' "
+                    f"con sudo NOPASSWD. Esto convierte claude_key en credencial root, "
+                    f"violando el principio de least-privilege del modelo homelab."
+                ),
+                "fix": (
+                    "Tras bootstrap correcto: regenerar claude_key (rotación) o, mejor, "
+                    "no inyectar claude_key vía cloud-init. Que el bootstrap añada la key "
+                    "solo al user 'claude' tras crearlo con sudoers whitelist."
+                ),
+            })
+
+    # 3. ¿cipassword está set? (debug / acceso de emergencia)
+    if cipassword_set:
+        issues.append({
+            "severity": "warning",
+            "category": "cipassword_set",
+            "msg": (
+                "cipassword está configurado en la cloud-init de la VM. Si se "
+                "filtra el snapshot del cloud-init drive, el password queda expuesto."
+            ),
+            "fix": (
+                "Tras el bootstrap, eliminar cipassword: "
+                "qm set <vmid> --delete cipassword"
+            ),
+        })
+
+    # 4. ¿Hay user 'claude' bootstrappeado? — solo verificable vía SSH/agent,
+    # no desde qm config. Reportar como info: usar guest agent si está activo.
+    info = {
+        "config": {
+            "ciuser": ciuser or None,
+            "sshkeys_present": bool(sshkeys_raw),
+            "sshkeys_contains_claude_key": "claude%40" in sshkeys_raw or "claude@" in sshkeys_raw,
+            "cipassword_set": cipassword_set,
+            "ipconfig0": vm_cfg.get("ipconfig0", ""),
+        },
+        "issues": issues,
+    }
+
+    if any(i["severity"] == "error" for i in issues):
+        info["overall"] = "degraded"
+    elif any(i["severity"] == "warning" for i in issues):
+        info["overall"] = "warnings"
+    else:
+        info["overall"] = "healthy"
+
+    return ok(info)
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 

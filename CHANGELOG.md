@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.2.0 (2026-05-02) — VM security audit tool
+
+### Added
+
+- **`check_vm_security(node, vmid)`** — audita postura de seguridad de una
+  VM Proxmox vía `qm config` (sin tocar la VM). Detecta:
+  - `ciuser` con sudo NOPASSWD por defecto en imágenes cloud (debian, ubuntu,
+    core, ec2-user, etc.)
+  - `claude_key` inyectada en un user privilegiado (privilege escalation
+    por reuso de credencial)
+  - `cipassword` set tras bootstrap (riesgo de leak por snapshot)
+
+  Cada issue lleva categoría + sugerencia de fix accionable (bootstrap
+  canónico, eliminar cipassword tras setup, etc.).
+
+  Read-only — usa solo el token Proxmox existente.
+
+### Diseño
+
+Complemento natural de `check_node` y `check_inventory` (v1.1.0). Cubre
+la pregunta operativa: "¿esta VM nueva está bootstrappeada según el modelo
+homelab o es un cloud-init shortcut con sudo libre?"
+
+Caso de uso: detectado el 2026-05-02 — VM 106 AdGuard se desplegó con
+`ciuser=debian` + claude_key en `/home/debian/.ssh/authorized_keys` + sudo
+NOPASSWD. Resultado: claude_key efectivamente concedía root al saltar el
+bootstrap canónico. Ahora detectable proactivamente con este tool.
+
 ## 1.1.0 (2026-05-02) — diagnostic tools
 
 ### Added
