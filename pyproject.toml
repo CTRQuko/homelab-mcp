@@ -1,6 +1,6 @@
 [project]
 name = "homelab-mcp"
-version = "1.3.0"
+version = "1.4.0"
 description = "Colección de servidores MCP para mi homelab (Proxmox, Linux, Windows, Docker, npm, Python)."
 authors = [
   { name = "CTRQuko" }

@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.4.0 (2026-05-02) — ssh_run canonical wrapper
+
+### Added
+
+- **`ssh_run(node, command, sudo=True, timeout=30)`** — wrapper canónico
+  que evita que el caller construya manualmente
+  `ssh <host> "echo $(cat sudo-key) | sudo -S ..."`. Lee la sudo
+  password de `CLAUDE_SUDO_KEY_FILE` (env var) — default a la convención
+  del homelab. Devuelve dict con `exit_code`, `stdout`, `stderr`,
+  `command_run` (sin password), `sudo_used`.
+
+  Defensa-en-profundidad:
+  - Bloquea login SSH como user privilegiado (root, debian, ubuntu,
+    admin, centos, fedora, alpine, core, ec2-user, azureuser) — espejo
+    del hook `validate-ssh.py` del CLI.
+  - Lista corta de patrones destructivos rechazados antes de tocar SSH
+    (rm -rf /, mkfs, dd zero, fork bomb, shutdown, reboot, halt, etc.).
+  - Strip del prompt `[sudo] password for...` del stderr.
+  - Password vía stdin (`echo PASS | sudo -S`) — NO en process list ni
+    en el `command_run` devuelto.
+
+  El sudoers whitelist del host (`/etc/sudoers.d/claude`) sigue siendo
+  el guard primario. Si un comando no está, sudo lo rechaza con
+  `exit_code != 0` y la tool lo refleja en la respuesta.
+
+### Tests
+
+- 12 tests nuevos en `tests/test_ssh_run.py`: input validation, sudo key
+  file handling, success paths (con/sin sudo), exit code propagation,
+  timeout, password leak prevention, sudo prompt stripping. Total
+  suite: **103 passing** (era 91).
+
+### Diseño
+
+Cierra el patrón de los behavioral guards de hoy. El CLI tenía hook
+`validate-ssh.py` que bloqueaba `ssh <user>@<host> "sudo bash -c ..."` —
+pero entonces ¿cómo ejecuta Claude comandos legítimos en hosts? La
+respuesta es esta tool: el caller dice `ssh_run("pve", "/usr/sbin/pct
+list")` y la tool se encarga del resto. No hay manera de
+filtrar password ni de saltarse la whitelist sudoers.
+
 ## 1.3.0 (2026-05-02) — Schema validation de proxmox_nodes.json
 
 ### Added

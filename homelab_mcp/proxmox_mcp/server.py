@@ -667,6 +667,165 @@ def check_vm_security(node: str, vmid: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tool de ejecución SSH (canonical wrapper SSH+sudo) — v1.4.0
+# ---------------------------------------------------------------------------
+
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+# Patrones destructivos rechazados de plano. NO es seguridad real (solo
+# defensa-en-profundidad — el sudoers whitelist del host sigue siendo el
+# guard primario). Captura errores tipográficos obvios antes de tocar SSH.
+_DESTRUCTIVE_PATTERNS = (
+    "rm -rf /",
+    "rm -rf ~",
+    "mkfs.",
+    "dd if=/dev/zero of=/dev/sd",
+    "dd if=/dev/zero of=/dev/nvme",
+    ":(){:|:&};:",  # fork bomb
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "init 0",
+    "init 6",
+)
+
+
+@mcp.tool()
+def ssh_run(
+    node: str,
+    command: str,
+    sudo: bool = True,
+    timeout: int = 30,
+) -> dict:
+    """Ejecuta un comando en un host remoto vía SSH (con sudo opcional).
+
+    Wrapper canónico que evita que el caller construya manualmente
+    ``ssh <host> "echo $(cat sudo-key) | sudo -S ..."``. Lee la sudo
+    password de ``CLAUDE_SUDO_KEY_FILE`` (env var) — default a
+    ``C:/homelab/.config/secrets/claude-sudo.key`` (Windows) o
+    ``~/.config/secrets/claude-sudo.key`` (Linux/macOS).
+
+    Seguridad:
+    - El usuario remoto SSH es el del ``~/.ssh/config`` del operador
+      (típicamente ``claude``). Esta tool NO hace login como root, debian,
+      ubuntu, ni similar.
+    - El sudoers whitelist del host (``/etc/sudoers.d/claude``) es el
+      guard primario: si el comando no está, sudo lo rechaza con código
+      no-cero y la tool devuelve ese error.
+    - Defensa-en-profundidad: lista corta de patrones destructivos
+      rechazados antes de tocar SSH (rm -rf /, mkfs, dd zero, fork bomb,
+      shutdown, etc.).
+
+    Args:
+        node: Alias SSH resoluble del ``~/.ssh/config`` del operador
+            (e.g. ``pve``, ``pve2``, ``truenas``, ``lxc-nextcloud``).
+        command: Comando a ejecutar EN EL HOST. Si ``sudo=True``, el
+            comando debe estar en la whitelist sudoers (full path
+            obligatorio, e.g. ``/usr/sbin/pct list``).
+        sudo: Si True, prefija con sudo password. Default True.
+        timeout: Timeout en segundos. Default 30.
+
+    Returns:
+        Dict con ``ok``, ``exit_code``, ``stdout``, ``stderr``,
+        ``command_run`` (sin password), ``sudo_used``.
+    """
+    if not shutil.which("ssh"):
+        return error("ssh no está disponible en PATH")
+
+    if not isinstance(node, str) or not node.strip():
+        return error("node es obligatorio (alias SSH)")
+    if not isinstance(command, str) or not command.strip():
+        return error("command es obligatorio")
+
+    # Reject login como users privilegiados via @ en el alias. Mismo modelo
+    # que el hook validate-ssh.py — defensa contra cloud-init shortcuts.
+    if "@" in node:
+        priv_users = {"root", "debian", "ubuntu", "admin",
+                      "centos", "fedora", "alpine", "core",
+                      "ec2-user", "azureuser"}
+        user_part = node.split("@", 1)[0]
+        if user_part in priv_users:
+            return error(
+                f"Login SSH como user '{user_part}' bloqueado. Usa el "
+                f"alias del ~/.ssh/config (que apunta a user 'claude' o "
+                f"similar limitado), no user@host directo."
+            )
+
+    # Defensa-en-profundidad: patrones destructivos
+    cmd_lower = command.lower()
+    for pat in _DESTRUCTIVE_PATTERNS:
+        if pat in cmd_lower:
+            return error(
+                f"Comando rechazado: contiene patrón destructivo {pat!r}. "
+                "Si es legítimo, usa el path/argumento exacto del sudoers."
+            )
+
+    if sudo:
+        key_path = os.getenv(
+            "CLAUDE_SUDO_KEY_FILE",
+            r"C:\homelab\.config\secrets\claude-sudo.key"
+            if os.name == "nt"
+            else os.path.expanduser("~/.config/secrets/claude-sudo.key"),
+        )
+        try:
+            password = Path(key_path).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return error(
+                f"sudo key file no encontrado: {key_path}. "
+                "Define CLAUDE_SUDO_KEY_FILE o pon la key en el path default."
+            )
+        except OSError as e:
+            return error(f"Error leyendo sudo key: {e}")
+        if not password:
+            return error("sudo key file está vacío")
+
+        # echo password | sudo -S -p '' command
+        # -p '' suprime el prompt de sudo (que iría a stderr)
+        # Password vía stdin para no aparecer en process list
+        remote_cmd = f"echo '{password}' | sudo -S -p '' {command}"
+    else:
+        remote_cmd = command
+
+    try:
+        proc = subprocess.run(
+            ["ssh", node, remote_cmd],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return error(
+            f"Timeout tras {timeout}s ejecutando comando en {node!r}"
+        )
+    except FileNotFoundError:
+        return error("ssh binary no disponible (ya validado arriba — race?)")
+    except Exception as e:
+        return error(f"Error ejecutando ssh: {e}")
+
+    # Limpiar prompts de sudo del stderr (con o sin newline tras el prompt)
+    stderr_clean = re.sub(
+        r"^\[sudo\] password for [^\n:]+:\s*",
+        "",
+        proc.stderr.strip(),
+    )
+
+    return ok({
+        "node": node,
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout.strip(),
+        "stderr": stderr_clean,
+        "command_run": command,  # SIN password
+        "sudo_used": sudo,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
