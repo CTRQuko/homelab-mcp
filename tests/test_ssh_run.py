@@ -146,6 +146,34 @@ def test_ssh_run_timeout(fake_sudo_key):
     assert "timeout" in result["error"].lower()
 
 
+def test_ssh_run_default_timeout_is_60s(fake_sudo_key):
+    """El default es 60s (subido de 30s en sesion 2026-05-08).
+
+    Regresion guard: que nadie revierta el default sin actualizar este test.
+    """
+    import inspect
+    from homelab_mcp.proxmox_mcp.server import ssh_run
+    sig = inspect.signature(ssh_run)
+    assert sig.parameters["timeout"].default == 60
+
+
+def test_ssh_run_timeout_error_message_suggests_override(fake_sudo_key):
+    """El mensaje de TimeoutExpired debe sugerir override con un valor mayor.
+
+    Mejora UX para casos comunes (apt update, build, pull) donde el caller
+    ve el timeout y NO sabe que puede pasar `timeout=N` mas alto.
+    """
+    from homelab_mcp.proxmox_mcp.server import ssh_run
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=60)
+        result = ssh_run("pve", "/usr/sbin/pct list")  # default timeout=60
+    assert result["ok"] is False
+    err = result["error"].lower()
+    assert "timeout" in err
+    # Hint debe incluir el valor sugerido para reintento (2x el original)
+    assert "120" in result["error"] or "timeout=" in err
+
+
 def test_ssh_run_password_passed_via_stdin_not_args(fake_sudo_key):
     """Password va en remote_cmd (echo), NO en args de subprocess."""
     from homelab_mcp.proxmox_mcp.server import ssh_run

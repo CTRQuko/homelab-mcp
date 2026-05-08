@@ -700,7 +700,7 @@ def ssh_run(
     node: str,
     command: str,
     sudo: bool = True,
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> dict:
     """Ejecuta un comando en un host remoto vía SSH (con sudo opcional).
 
@@ -728,7 +728,9 @@ def ssh_run(
             comando debe estar en la whitelist sudoers (full path
             obligatorio, e.g. ``/usr/sbin/pct list``).
         sudo: Si True, prefija con sudo password. Default True.
-        timeout: Timeout en segundos. Default 30.
+        timeout: Timeout en segundos. Default 60. Override para
+            comandos lentos (e.g. ``timeout=120`` para apt update,
+            ``timeout=300`` para builds o pulls grandes).
 
     Returns:
         Dict con ``ok``, ``exit_code``, ``stdout``, ``stderr``,
@@ -801,7 +803,9 @@ def ssh_run(
         )
     except subprocess.TimeoutExpired:
         return error(
-            f"Timeout tras {timeout}s ejecutando comando en {node!r}"
+            f"Timeout tras {timeout}s ejecutando comando en {node!r}. "
+            f"Si el comando es legitimamente lento (apt update, build, "
+            f"pull), reintenta con timeout={timeout * 2} o mas."
         )
     except FileNotFoundError:
         return error("ssh binary no disponible (ya validado arriba — race?)")
